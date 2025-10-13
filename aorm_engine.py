@@ -16,7 +16,7 @@ if os.path.exists('system_baseline.json'):
     with open('system_baseline.json', 'r') as f:
         SYSTEM_BASELINE_EXECS = set(json.load(f).keys())
 
-CRITICAL_THRESHOLD = 25.0
+CRITICAL_THRESHOLD = 12.0
 WHITELIST_PATHS = ('/proc/', '/lib/', '/usr/lib/', '/etc/ld.so.cache',)
 OBJECT_POLICY = {"/etc/shadow": "L0", "/etc/passwd": "L0", "/etc/sudoers": "L0", "/root/": "L1", "/etc/": "L2", "/var/log/": "L3", "/tmp/": "L3",}
 ACTION_POLICY = {"bash": "L2", "cat": "L3", "sshd": "L1", "vim": "L2", "rm": "L1",}

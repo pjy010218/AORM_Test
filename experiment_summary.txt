@@ -1,0 +1,10 @@
+========== Creating FIM Baseline ==========
+  -> Running: sudo python3 fim_baseline.py create
+
+==================== Repetition 1/5 ====================
+
+--- Running Scenario for AORM: 1_recon ---
+  -> Resetting environment...
+  -> Running: sudo python3 -u main.py
+  -> Running: sudo stdbuf -oL ./simulate_normal.sh
+  -> Learning phase for 300 seconds...

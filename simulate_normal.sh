@@ -14,13 +14,15 @@ log_action() {
 # 일반적인 파일 시스템 탐색을 시뮬레이션하는 함수
 simulate_browsing() {
     log_action "Simulating file system browsing..."
-    local DIRS=("/var/log/" "/home/aorm/" "/usr/bin/")
+    local DIRS=("/var/log/" "/home/junyeong/" "/home/junyeong/Documents" "/home/junyeong/Downloads")
     local DIR_TO_LIST=${DIRS[$((RANDOM % ${#DIRS[@]}))]}
     
-    ls -l $DIR_TO_LIST > /dev/null 2>&1
+    if [ -d "$DIR_TO_LIST" ]; then
+        ls -l $DIR_TO_LIST > /dev/null 2>&1
+    fi
     
     # 공격 행위와 겹치지 않도록, 홈 디렉토리 내에서만 find 실행
-    find /home/aorm -name "*.py" | head -n 1 > /dev/null 2>&1
+    find /home/junyeong -name "*.txt" | head -n 1 > /dev/null 2>&1
 }
 
 # 로그 파일을 읽는 관리자 행위를 시뮬레이션하는 함수

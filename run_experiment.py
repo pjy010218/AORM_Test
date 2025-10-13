@@ -74,47 +74,73 @@ def calculate_final_metrics(results):
 
 # --- 3. 메인 실험 루프 ---
 def main():
+    """실험 전체를 조율하고 결과를 출력합니다."""
+    
     print("="*10 + " Creating FIM Baseline " + "="*10)
     run_command(f"{CONFIG['fim_baseline_script']} create", wait=True)
     results_by_system = {"aorm": [], "fim": []}
 
+    # --- AORM 실험 ---
+    print("\n" + "="*20 + " Running AORM Experiment " + "="*20)
     for i in range(CONFIG["repetitions"]):
-        print(f"\n{'='*20} Repetition {i+1}/{CONFIG['repetitions']} {'='*20}")
+        print(f"\n--- AORM Repetition {i+1}/{CONFIG['repetitions']} ---")
         for name, scenario in CONFIG["attack_scenarios"].items():
-            # --- AORM Test ---
             print(f"\n--- Running Scenario for AORM: {name} ---")
             reset_environment()
+            
             aorm_proc = run_command(CONFIG["aorm_agent_cmd"], CONFIG["aorm_agent_log"])
             time.sleep(5)
+            
             sim_proc = run_command(CONFIG["simulator_cmd"], "simulation.log")
             print(f"  -> Learning phase for {CONFIG['learning_duration_seconds']} seconds...")
-            time.sleep(CONFIG["learning_duration_seconds"])
+            time.sleep(CONFIG['learning_duration_seconds'])
             stop_process(sim_proc, "Simulator")
+            
             print("  -> Executing attack scenario...")
             run_command(scenario["cmd"], wait=True)
             time.sleep(5)
+            
             stop_process(aorm_proc, "AORM Agent")
+            
             aorm_result = analyze_aorm_log(name)
             results_by_system["aorm"].append(aorm_result)
             print(f"  -> AORM Analysis Result: {aorm_result}")
-            
-            # --- FIM Test ---
+
+    # --- FIM 실험 ---
+    print("\n" + "="*20 + " Running FIM Experiment " + "="*20)
+    for i in range(CONFIG["repetitions"]):
+        print(f"\n--- FIM Repetition {i+1}/{CONFIG['repetitions']} ---")
+        for name, scenario in CONFIG["attack_scenarios"].items():
             print(f"\n--- Running Scenario for FIM: {name} ---")
+            
+            # FIM 실험에서는 학습이나 AORM 에이전트가 필요 없으므로 환경만 초기화
+            reset_environment() 
+
+            # 공격 스크립트를 'no-cleanup' 인자로 실행하여 탬퍼링된 상태 유지
             attack_cmd_for_fim = f"{scenario['cmd']} no-cleanup"
             print("  -> Executing attack scenario (no-cleanup mode)...")
             run_command(attack_cmd_for_fim, wait=True)
+            
+            # 탬퍼링된 상태에서 FIM 검사 실행
             fim_proc = run_command(f"{CONFIG['fim_baseline_script']} check", wait=True)
             fim_result = analyze_fim_log(fim_proc.stdout, name)
             results_by_system["fim"].append(fim_result)
             print(f"  -> FIM Analysis Result: {fim_result}")
-            print("  -> Restoring system state...")
-            run_command(f"{scenario['cmd']} cleanup", wait=True)
 
-    # --- 4. 최종 결과 집계 및 출력 ---
+            # 시스템 원상 복구를 위해 'cleanup' 모드만 안전하게 호출
+            print("  -> Restoring system state...")
+            cleanup_cmd = f"{scenario['cmd']} cleanup"
+            run_command(cleanup_cmd, wait=True)
+
+    # --- 최종 결과 집계 및 출력 ---
     print(f"\n{'='*20} Final Experiment Summary {'='*20}")
+    
+    aorm_metrics = calculate_final_metrics(results_by_system["aorm"])
+    fim_metrics = calculate_final_metrics(results_by_system["fim"])
+
     summary = {
-        "AORM-TS-P": calculate_final_metrics(results_by_system["aorm"]),
-        "Traditional_FIM": calculate_final_metrics(results_by_system["fim"])
+        "AORM-TS-P": aorm_metrics,
+        "Traditional_FIM": fim_metrics
     }
     print(json.dumps(summary, indent=4))
 

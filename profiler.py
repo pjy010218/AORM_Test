@@ -1,4 +1,4 @@
-# profiler.py (이전과 동일, 변경 없음)
+# profiler.py
 
 import json
 import os
@@ -14,16 +14,13 @@ class HybridProfiler:
         self.BASE_SCORE_THRESHOLD = base_score_threshold
 
     def _load(self):
-        if os.path.exists(self.profile_path):
-            data = {}
-            with open(self.profile_path, 'r') as f:
-                raw_data = json.load(f)
-                for key, value in raw_data.items():
-                    value['timestamps'] = deque(value.get('timestamps', []), maxlen=self.MAX_TIMESTAMPS)
-                    data[key] = value
-                return data
-        return {}
-
+        if not os.path.exists(self.profile_path): return {}
+        with open(self.profile_path, 'r') as f:
+            raw_data = json.load(f)
+            for key, value in raw_data.items():
+                value['timestamps'] = deque(value.get('timestamps', []), maxlen=self.MAX_TIMESTAMPS)
+            return raw_data
+        
     def _save(self):
         data_to_save = {}
         for key, value in self.profile_data.items():
@@ -36,7 +33,7 @@ class HybridProfiler:
     def _update_stats(self, event_key):
         timestamps = self.profile_data[event_key]['timestamps']
         if len(timestamps) < 2: return
-        intervals = [(timestamps[i] - timestamps[i-1]) for i in range(1, len(timestamps))]
+        intervals = [timestamps[i] - timestamps[i-1] for i in range(1, len(timestamps))]
         if len(intervals) > 1:
             self.profile_data[event_key]['mean_interval'] = mean(intervals)
             self.profile_data[event_key]['std_dev_interval'] = stdev(intervals)
@@ -44,12 +41,12 @@ class HybridProfiler:
             self.profile_data[event_key]['mean_interval'] = intervals[0]
 
     def process_event(self, process_name, file_path, base_score):
-        event_key = f"{process_name}|{file_path}"
-        current_time = time.time()
-        
         if base_score >= self.BASE_SCORE_THRESHOLD:
             return 1.0
 
+        event_key = f"{process_name}|{file_path}"
+        current_time = time.time()
+        
         if event_key not in self.profile_data:
             self.profile_data[event_key] = { 'count': 1, 'timestamps': deque([current_time], maxlen=self.MAX_TIMESTAMPS), 'mean_interval': 0, 'std_dev_interval': 0 }
             self._save()
