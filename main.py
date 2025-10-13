@@ -83,7 +83,6 @@ int trace_rename_event(struct pt_regs *ctx, int olddfd, const char __user *oldna
 
 TRACEPOINT_PROBE(syscalls, sys_enter_execve) {
     u32 uid = bpf_get_current_uid_gid() & 0xffffffff;
-    if (uid < 1000) { return 0; }
 
     int zero = 0;
     struct data_t *data = data_map.lookup(&zero);

@@ -18,8 +18,8 @@ if os.path.exists('system_baseline.json'):
 
 CRITICAL_THRESHOLD = 12.0
 WHITELIST_PATHS = ('/proc/', '/lib/', '/usr/lib/', '/etc/ld.so.cache',)
-OBJECT_POLICY = {"/etc/shadow": "L0", "/etc/passwd": "L0", "/etc/sudoers": "L0", "/root/": "L1", "/etc/": "L2", "/var/log/": "L3", "/tmp/": "L3",}
-ACTION_POLICY = {"bash": "L2", "cat": "L3", "sshd": "L1", "vim": "L2", "rm": "L1",}
+OBJECT_POLICY = {"/etc/shadow": "L0", "/etc/passwd": "L0", "/etc/sudoers": "L0", "bin": "L1", "/usr/bin": "L1", "/sbin": "L1", "/root/": "L1", "/etc/": "L2", "/var/log/": "L3", "/tmp/": "L3",}
+ACTION_POLICY = {"bash": "L2", "cat": "L3", "sshd": "L1", "vim": "L2", "rm": "L1", "mv": "L1", "cp": "L1", "nano": "L2", "systemd": "L0", "sudo": "L0", "find": "L3", "python3": "L2", "perl": "L2", "gcc": "L2", "g++": "L2", "make": "L2", "curl": "L2", "wget": "L2",}
 LEVEL_SCORES = {"L0": 10, "L1": 7, "L2": 4, "L3": 1}
 LEVEL_NAMES = ["L0", "L1", "L2", "L3"]
 
