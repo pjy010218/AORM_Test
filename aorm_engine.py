@@ -64,7 +64,7 @@ def get_aorm_levels(process_name, file_path):
     return f"[L{act_level_idx}, L{obj_level_idx}]"
 
 
-def analyze_file_open_event(event):
+def analyze_file_event(event):
     """파일 접근 이벤트의 위험도를 종합적으로 분석합니다."""
     process_name = event.comm.decode('utf-8', 'replace')
     file_path = event.fname.decode('utf-8', 'replace')
@@ -112,6 +112,6 @@ def process_event_from_kernel(event):
         exe_path = event.fname.decode('utf-8', 'replace')
         process_tree[pid] = {'ppid': ppid, 'comm': comm, 'exe_path': exe_path}
     
-    elif event_type == 0: # EVENT_TYPE_FILE_OPEN
-        # 파일 접근 이벤트 분석
-        analyze_file_open_event(event)
+    # FILE_OPEN, RENAME, UNLINK 모두 동일한 파일 이벤트 분석 함수로 전달
+    elif event_type in [0, 2, 3]: 
+        analyze_file_event(event)
