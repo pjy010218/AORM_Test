@@ -1,4 +1,4 @@
-# profiler.py
+# profiler.py (이전과 동일, 변경 없음)
 
 import json
 import os
@@ -6,11 +6,12 @@ import time
 from collections import deque
 from statistics import mean, stdev
 
-class StatisticalProfiler:
-    def __init__(self, profile_path='behavior_profile.json'):
+class HybridProfiler:
+    def __init__(self, profile_path='behavior_profile.json', base_score_threshold=8.0):
         self.profile_path = profile_path
         self.MAX_TIMESTAMPS = 100
         self.profile_data = self._load()
+        self.BASE_SCORE_THRESHOLD = base_score_threshold
 
     def _load(self):
         if os.path.exists(self.profile_path):
@@ -42,10 +43,13 @@ class StatisticalProfiler:
         elif len(intervals) == 1:
             self.profile_data[event_key]['mean_interval'] = intervals[0]
 
-    def process_event(self, process_name, file_path):
+    def process_event(self, process_name, file_path, base_score):
         event_key = f"{process_name}|{file_path}"
         current_time = time.time()
         
+        if base_score >= self.BASE_SCORE_THRESHOLD:
+            return 1.0
+
         if event_key not in self.profile_data:
             self.profile_data[event_key] = { 'count': 1, 'timestamps': deque([current_time], maxlen=self.MAX_TIMESTAMPS), 'mean_interval': 0, 'std_dev_interval': 0 }
             self._save()
