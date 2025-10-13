@@ -44,18 +44,42 @@ def reset_environment():
             os.remove(f)
 
 def analyze_aorm_log(scenario_key):
-    total_alerts = 0; attack_detected = False
+    """
+    [수정됨] 로그 전체를 읽고, 경고(🚨)와 그 원인이 되는 indicator를 함께 분석합니다.
+    """
+    total_alerts = 0
+    attack_detected = False
     indicator = CONFIG["attack_scenarios"][scenario_key]["aorm_indicator"]
-    if os.path.exists(CONFIG["aorm_agent_log"]):
-        with open(CONFIG["aorm_agent_log"], 'r') as f:
-            for line in f:
-                if "🚨" in line:
-                    total_alerts += 1
-                    if indicator in line:
-                        attack_detected = True
+    
+    if not os.path.exists(CONFIG["aorm_agent_log"]):
+        return {'tp': 0, 'fp': 0, 'fn': 1}
+
+    # 파일을 한 번에 모두 읽어 메모리에 올립니다.
+    with open(CONFIG["aorm_agent_log"], 'r') as f:
+        log_lines = f.readlines()
+
+    # 모든 라인을 순회하며 경고를 찾습니다.
+    for i, line in enumerate(log_lines):
+        if "🚨" in line:
+            total_alerts += 1
+            # 경고가 발견되면, 이전 5개 라인을 확인하여 indicator가 있는지 검사합니다.
+            # 이것이 공격의 '맥락'을 확인하는 과정입니다.
+            context_window = log_lines[max(0, i-5):i]
+            for context_line in context_window:
+                if indicator in context_line:
+                    attack_detected = True
+                    break # 하나의 경고에 대해 indicator를 찾으면 더 이상 찾을 필요 없음
+    
+    # recon 시나리오에 대한 특별 처리 (기존 로직 유지)
     if scenario_key == "1_recon" and total_alerts > 0:
         attack_detected = True
-    return {'tp': 1, 'fp': total_alerts - 1, 'fn': 0} if attack_detected else {'tp': 0, 'fp': total_alerts, 'fn': 1}
+        
+    if attack_detected:
+        # 공격을 정확히 탐지했다면, 나머지 경고는 오탐(FP)으로 간주합니다.
+        return {'tp': 1, 'fp': total_alerts - 1, 'fn': 0}
+    else:
+        # 공격을 탐지하지 못했다면, 발생한 모든 경고는 오탐(FP)입니다.
+        return {'tp': 0, 'fp': total_alerts, 'fn': 1}
 
 def analyze_fim_log(fim_output, scenario_key):
     alerts = fim_output.strip().split('\n')
