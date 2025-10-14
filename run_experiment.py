@@ -140,6 +140,39 @@ def analyze_fim_log(fim_output, scenario_key):
         return {'tp': 0, 'fp': alert_count, 'fn': 1}
     return {'tp': 1, 'fp': alert_count - expected_alerts, 'fn': 0} if alert_count >= expected_alerts else {'tp': 0, 'fp': alert_count, 'fn': 1}
 
+def monitor_log_for_alerts(log_path, timeout=30, poll_interval=1, alert_token="🚨"):
+    """
+    Incrementally tail the given log file until `alert_token` appears or `timeout` expires.
+    Returns (found_bool, matched_lines).
+    """
+    start = time.time()
+    matched = []
+
+    # 로그 파일이 생성될 때까지 대기
+    end_time = start + timeout
+    while not os.path.exists(log_path) and time.time() < end_time:
+        time.sleep(0.1)
+    if not os.path.exists(log_path):
+        return False, matched
+
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+            # 처음엔 파일 끝으로 이동
+            f.seek(0, os.SEEK_END)
+            while time.time() < end_time:
+                line = f.readline()
+                if not line:
+                    time.sleep(poll_interval)
+                    continue
+                if alert_token in line:
+                    matched.append(line.strip())
+                    return True, matched
+    except Exception as e:
+        print(f"[monitor_log_for_alerts] Warning: {e}")
+        return False, matched
+
+    return False, matched
+
 def calculate_final_metrics(results):
     total_tp = sum(r['tp'] for r in results); total_fp = sum(r['fp'] for r in results); total_fn = sum(r['fn'] for r in results)
     precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0
@@ -189,24 +222,13 @@ def main():
             print("  -> Executing attack scenario in background...")
             attack_proc = run_command(scenario["cmd"])
 
-            # ▼▼▼▼▼ [핵심] '지능형 대기' 로직 ▼▼▼▼▼
             print(f"  -> Waiting for ALERT in '{attack_log_file}'...")
-            alert_found = False
-            timeout = 30  # 최대 30초간 대기
-            end_time = time.time() + timeout
-            
-            while time.time() < end_time:
-                if os.path.exists(attack_log_file):
-                    with open(attack_log_file, 'r') as f:
-                        if "🚨" in f.read():
-                            print("  -> ✅ ALERT signal detected in log file!")
-                            alert_found = True
-                            break
-                time.sleep(1) # 1초마다 로그 파일 확인
+            alert_found, matched_lines = monitor_log_for_alerts(attack_log_file, timeout=30, poll_interval=0.5)
 
-            if not alert_found:
+            if alert_found:
+                print(f"  -> ✅ ALERT signal detected! {matched_lines}")
+            else:
                 print("  -> ❌ Timeout: No ALERT signal detected within 30 seconds.")
-            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
             # 모든 관련 프로세스 정리
             stop_process(attack_proc, "Attack Scenario")
