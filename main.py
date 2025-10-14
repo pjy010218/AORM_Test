@@ -6,7 +6,7 @@ AORM Agent with BPF event capture + AORM Engine integration
  - Sends each event to aorm_engine.process_event_from_kernel() for analysis
  - Prints ALERT and trajectory logs through aorm_engine
 """
-
+from types import SimpleNamespace
 import ctypes as ct
 import time
 import os
@@ -130,9 +130,9 @@ EVENT_TYPE_MAP = {0: "OPEN", 1: "EXEC", 2: "RENAME", 3: "UNLINK"}
 def handle_event(cpu, data, size):
     event = ct.cast(data, ct.POINTER(DataEvent)).contents
     etype = event.type
-    fname = event.fname.decode('utf-8', errors='replace').rstrip('\x00')
-    oldname = event.old_fname.decode('utf-8', errors='replace').rstrip('\x00')
-    comm = event.comm.decode('utf-8', errors='replace').rstrip('\x00')
+    fname = event.fname
+    oldname = event.old_fname
+    comm = event.comm
 
     # AORM 엔진이 기대하는 형식으로 이벤트 dict 구성
     event_dict = {
@@ -147,7 +147,9 @@ def handle_event(cpu, data, size):
 
     # 🔥 분석 실행 (이 함수 내부에서 ALERT / Trajectory 로그가 출력됨)
     try:
-        aorm_engine.process_event_from_kernel(event_dict)
+        from types import SimpleNamespace
+        event_obj = SimpleNamespace(**event_dict)
+        aorm_engine.process_event_from_kernel(event_obj)
     except Exception as e:
         print(f"[AORM ERROR] Failed to process event: {e}")
 
