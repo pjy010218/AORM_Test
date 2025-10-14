@@ -43,9 +43,14 @@ struct data_t {
 BPF_PERCPU_ARRAY(data_map, struct data_t, 1);
 BPF_PERF_OUTPUT(events);
 
-static inline int trace_syscall_common(struct pt_regs *ctx, const char __user *filename, enum event_type event_type) {
-    u32 uid = bpf_get_current_uid_gid() & 0xffffffff;
-    if (uid < 1000) { return 0; }
+BPF_HASH(uid_filter_map, u32, u8);  // UID별 모니터링 활성화 플래그
+
+static inline int should_monitor(u32 uid) {
+    u8 *monitor = uid_filter_map.lookup(&uid);
+    if (monitor && *monitor == 1) return 1;
+    if (uid >= 1000) return 1;  // 일반 사용자는 항상 모니터링
+    return 0;
+}
     
     // ▼▼▼▼▼ 2. 맵에서 데이터 구조체 포인터를 가져옴 ▼▼▼▼▼
     int zero = 0;
