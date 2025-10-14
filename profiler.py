@@ -49,43 +49,51 @@ class HybridProfiler:
         self._save()
 
     def process_event(self, process_name, file_path, base_score):
-        """이벤트를 처리하고 변칙 점수를 계산합니다."""
+        """개선된 통계 계산"""
         if base_score >= self.base_score_threshold:
             return 1.0
-
+    
         event_key = f"{process_name} {file_path}"
         current_time = time.time()
         
-        # event_key가 처음 나타난 경우 초기화
         if event_key not in self.profile:
             self.profile[event_key] = {
-                'count': 0, 'intervals': [], 'mean': 0, 'std_dev': 0, 'last_seen': 0
+                'count': 0,
+                'mean': 0,
+                'M2': 0,  # Welford 알고리즘을 위한 제곱합
+                'std_dev': 0,
+                'last_seen': 0
             }
-
+    
         stats = self.profile[event_key]
         
-        # 첫 이벤트가 아닌 경우에만 interval 계산
-        interval = 0
-        if stats['last_seen'] > 0:
-            interval = current_time - stats['last_seen']
-
+        # 첫 이벤트가 아닌 경우 interval 계산
+        if stats['last_seen'] == 0:
+            stats['last_seen'] = current_time
+            stats['count'] = 1
+            return 0.8  # 첫 등장은 높은 이상도
+        
+        interval = current_time - stats['last_seen']
+        stats['count'] += 1
+        
+        # Welford's 온라인 알고리즘
+        delta = interval - stats['mean']
+        stats['mean'] += delta / stats['count']
+        delta2 = interval - stats['mean']
+        stats['M2'] += delta * delta2
+        
+        if stats['count'] >= 2:
+            variance = stats['M2'] / (stats['count'] - 1)
+            stats['std_dev'] = variance ** 0.5
+        
         # Z-score 계산
-        anomaly_score = 0.8 # 기본 점수 (첫 등장은 높게)
-        if stats['count'] > 1 and stats['std_dev'] > 0:
+        anomaly_score = 0.0
+        if stats['count'] > 2 and stats['std_dev'] > 0:
             z_score = abs((interval - stats['mean']) / stats['std_dev'])
             anomaly_score = min(1.0, z_score / 3.0)
         elif stats['count'] > 1:
-            anomaly_score = 0.0 if interval == stats['mean'] else 1.0
-
-        # 통계 업데이트
-        stats['count'] += 1
+            anomaly_score = 1.0 if interval != stats['mean'] else 0.0
+        
         stats['last_seen'] = current_time
-        if interval > 0:
-            stats['intervals'].append(interval)
-            if len(stats['intervals']) > 100:
-                stats['intervals'].pop(0)
-            # running average 계산
-            stats['mean'] = stats['mean'] + (interval - stats['mean']) / stats['count']
-            # 표준편차는 단순화를 위해 생략하거나 필요시 추가 구현
-
+        
         return anomaly_score
