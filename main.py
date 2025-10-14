@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AORM Agent with BPF event capture + AORM Engine integration
- - Captures kernel syscalls (open, unlink, rename, exec)
- - Sends each event to aorm_engine.process_event_from_kernel() for analysis
- - Prints ALERT and trajectory logs through aorm_engine
+[수정됨] AORM Agent with stable BPF Tracepoint event capture
+ - Captures kernel syscalls using stable tracepoints for reliability
+ - Preserves the modular design of the AORM Engine integration
+ - Implements graceful shutdown to ensure behavior profile is always saved
 """
 from types import SimpleNamespace
 import ctypes as ct
@@ -22,14 +22,12 @@ if os.geteuid() != 0:
     sys.exit(1)
 
 # ─────────────────────────────────────────────────────────────
-# BPF C 코드
+# BPF C 코드 (Tracepoint 기반으로 전면 재설계)
 # ─────────────────────────────────────────────────────────────
 bpf_program = r"""
 #include <uapi/linux/ptrace.h>
 #include <linux/sched.h>
 #include <linux/uidgid.h>
-#include <linux/limits.h>
-#include <linux/types.h>
 
 enum event_type {
     EVENT_TYPE_FILE_OPEN, // 0
@@ -51,8 +49,8 @@ struct data_t {
 BPF_PERCPU_ARRAY(data_map, struct data_t, 1);
 BPF_PERF_OUTPUT(events);
 
-// 공통 이벤트 제출 함수
-static inline int submit_event(struct pt_regs *ctx, enum event_type t, const char __user *fname, const char __user *oldname) {
+// 원본 철학을 유지하는 공통 이벤트 제출 함수
+static inline int submit_event(void *ctx, enum event_type t, const char __user *fname, const char __user *oldname) {
     int zero = 0;
     struct data_t *data = data_map.lookup(&zero);
     if (!data) return 0;
@@ -66,139 +64,96 @@ static inline int submit_event(struct pt_regs *ctx, enum event_type t, const cha
     data->ppid = task->real_parent ? task->real_parent->tgid : 0;
     bpf_get_current_comm(&data->comm, sizeof(data->comm));
 
-    if (fname)
-        bpf_probe_read_user_str(&data->fname, sizeof(data->fname), fname);
-    else
-        data->fname[0] = 0;
+    if (fname) bpf_probe_read_user_str(&data->fname, sizeof(data->fname), fname);
+    else data->fname[0] = 0;
 
-    if (oldname)
-        bpf_probe_read_user_str(&data->old_fname, sizeof(data->old_fname), oldname);
-    else
-        data->old_fname[0] = 0;
+    if (oldname) bpf_probe_read_user_str(&data->old_fname, sizeof(data->old_fname), oldname);
+    else data->old_fname[0] = 0;
 
     events.perf_submit(ctx, data, sizeof(struct data_t));
     return 0;
 }
 
-// 각 syscall별 핸들러
-int probe_openat(struct pt_regs *ctx) {
-    const char __user *filename = (const char __user *)PT_REGS_PARM2(ctx);
-    return submit_event(ctx, EVENT_TYPE_FILE_OPEN, filename, NULL);
+// === 안정적인 Tracepoint 핸들러 ===
+TRACEPOINT_PROBE(syscalls, sys_enter_openat) {
+    return submit_event(args, EVENT_TYPE_FILE_OPEN, (const char __user *)args->filename, NULL);
 }
-int probe_unlink(struct pt_regs *ctx) {
-    const char __user *pathname = (const char __user *)PT_REGS_PARM1(ctx);
-    return submit_event(ctx, EVENT_TYPE_UNLINK, pathname, NULL);
+TRACEPOINT_PROBE(syscalls, sys_enter_unlinkat) {
+    return submit_event(args, EVENT_TYPE_UNLINK, (const char __user *)args->pathname, NULL);
 }
-int probe_unlinkat(struct pt_regs *ctx) {
-    const char __user *pathname = (const char __user *)PT_REGS_PARM2(ctx);
-    return submit_event(ctx, EVENT_TYPE_UNLINK, pathname, NULL);
+TRACEPOINT_PROBE(syscalls, sys_enter_renameat2) {
+    return submit_event(args, EVENT_TYPE_RENAME, (const char __user *)args->newname, (const char __user *)args->oldname);
 }
-int probe_rename(struct pt_regs *ctx) {
-    const char __user *oldname = (const char __user *)PT_REGS_PARM1(ctx);
-    const char __user *newname = (const char __user *)PT_REGS_PARM2(ctx);
-    return submit_event(ctx, EVENT_TYPE_RENAME, newname, oldname);
-}
-int probe_execve(struct pt_regs *ctx) {
-    const char __user *filename = (const char __user *)PT_REGS_PARM1(ctx);
-    return submit_event(ctx, EVENT_TYPE_EXEC, filename, NULL);
-}
-int probe_execveat(struct pt_regs *ctx) {
-    const char __user *pathname = (const char __user *)PT_REGS_PARM2(ctx);
-    return submit_event(ctx, EVENT_TYPE_EXEC, pathname, NULL);
+TRACEPOINT_PROBE(syscalls, sys_enter_execve) {
+    return submit_event(args, EVENT_TYPE_EXEC, (const char __user *)args->filename, NULL);
 }
 """
 
 # ─────────────────────────────────────────────────────────────
-# Python 구조체 정의
+# Python 구조체 정의 (기존과 동일)
 # ─────────────────────────────────────────────────────────────
 class DataEvent(ct.Structure):
     _fields_ = [
-        ("type", ct.c_uint),
-        ("uid", ct.c_uint),
-        ("pid", ct.c_uint),
-        ("ppid", ct.c_uint),
-        ("comm", ct.c_char * 16),
-        ("fname", ct.c_char * 256),
-        ("old_fname", ct.c_char * 256),
+        ("type", ct.c_uint), ("uid", ct.c_uint), ("pid", ct.c_uint),
+        ("ppid", ct.c_uint), ("comm", ct.c_char * 16),
+        ("fname", ct.c_char * 256), ("old_fname", ct.c_char * 256),
     ]
 
-EVENT_TYPE_MAP = {0: "OPEN", 1: "EXEC", 2: "RENAME", 3: "UNLINK"}
-
 # ─────────────────────────────────────────────────────────────
-# 이벤트 처리 함수: AORM 엔진 호출
+# 이벤트 처리 함수: AORM 엔진 호출 (기존과 동일)
 # ─────────────────────────────────────────────────────────────
 def handle_event(cpu, data, size):
     event = ct.cast(data, ct.POINTER(DataEvent)).contents
-    etype = event.type
-    fname = event.fname
-    oldname = event.old_fname
-    comm = event.comm
-
-    # AORM 엔진이 기대하는 형식으로 이벤트 dict 구성
-    event_dict = {
-        "type": etype,
-        "uid": event.uid,
-        "pid": event.pid,
-        "ppid": event.ppid,
-        "comm": comm,
-        "fname": fname,
-        "old_fname": oldname,
-    }
-
-    # 🔥 분석 실행 (이 함수 내부에서 ALERT / Trajectory 로그가 출력됨)
     try:
-        from types import SimpleNamespace
-        event_obj = SimpleNamespace(**event_dict)
+        event_obj = SimpleNamespace(
+            type=event.type, uid=event.uid, pid=event.pid, ppid=event.ppid,
+            comm=event.comm, fname=event.fname, old_fname=event.old_fname,
+        )
         aorm_engine.process_event_from_kernel(event_obj)
     except Exception as e:
         print(f"[AORM ERROR] Failed to process event: {e}")
 
 # ─────────────────────────────────────────────────────────────
-# 종료 핸들러
+# 안전한 종료 핸들러 (재구현)
 # ─────────────────────────────────────────────────────────────
+keep_running = True
 def handle_signal(sig, frame):
-    print("\n[INFO] Received signal, shutting down AORM agent...")
-    sys.exit(0)
+    global keep_running
+    print("\n[INFO] Shutdown signal received, stopping agent gracefully...")
+    keep_running = False
 
 # ─────────────────────────────────────────────────────────────
-# 메인 루프
+# 메인 루프 (수정됨)
 # ─────────────────────────────────────────────────────────────
 def main():
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    print("Loading BPF program and attaching probes...")
-    b = BPF(text=bpf_program)
-
-    # Attach probes safely
+    print("Loading BPF program with tracepoints...")
     try:
-        b.attach_kprobe(event=b.get_syscall_fnname("openat"), fn_name="probe_openat")
+        b = BPF(text=bpf_program)
     except Exception as e:
-        print(f"[WARN] openat attach failed: {e}")
+        print(f"[FATAL] BPF program failed to load: {e}")
+        print("Please ensure you have the correct kernel headers installed.")
+        sys.exit(1)
 
-    for fn_name, probe in [
-        ("unlink", "probe_unlink"),
-        ("unlinkat", "probe_unlinkat"),
-        ("rename", "probe_rename"),
-        ("execve", "probe_execve"),
-        ("execveat", "probe_execveat"),
-    ]:
-        try:
-            b.attach_kprobe(event=b.get_syscall_fnname(fn_name), fn_name=probe)
-        except Exception:
-            pass
-
+    # Tracepoint는 BPF 코드 내에서 자동으로 attach되므로, attach_kprobe 호출이 불필요.
+    
     b["events"].open_perf_buffer(handle_event)
 
-    print("✅ AORM Agent is now monitoring kernel events...")
-    while True:
-        try:
+    print("✅ AORM Agent is now monitoring kernel events via tracepoints...")
+    
+    try:
+        while keep_running:
             b.perf_buffer_poll(timeout=1000)
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            print(f"[WARN] perf poll error: {e}")
-            time.sleep(0.5)
+    except Exception as e:
+        print(f"[ERROR] An unexpected error occurred in the main loop: {e}")
+    finally:
+        # [중요] 정상 종료 시 프로파일을 저장하여 데이터 유실을 방지
+        print("[INFO] Main loop exited. Saving final behavior profile...")
+        if aorm_engine.behavior_profiler:
+            aorm_engine.behavior_profiler.save_profile()
+        print("\n👋 AORM Agent stopped gracefully.")
 
 if __name__ == "__main__":
     main()
