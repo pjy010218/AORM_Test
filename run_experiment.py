@@ -16,17 +16,17 @@ CONFIG = {
     "attack_scenarios": {
         "1_recon": {
             "cmd": "./attack_recon.sh", 
-            "aorm_indicator": "find", # 더 간단하고 명확한 indicator
+            "aorm_indicators": ["find /", "cat /etc/passwd"],
             "attack_log": "attack_recon_simulation.log" # 시나리오별 로그 파일 지정
         },
         "2_rootkit": {
             "cmd": "sudo ./attack_rootkit.sh", 
-            "aorm_indicator": "/bin/ls", 
+            "aorm_indicators": ["/bin/ls", "mv /bin/ls", "cp /tmp/malicious_ls"],
             "attack_log": "attack_rootkit_simulation.log"
         },
         "3_multistage": {
             "cmd": "./attack_multistage.sh", 
-            "aorm_indicator": "payload", 
+            "aorm_indicators": ["payload", "wget", "/tmp/payload"],
             "attack_log": "attack_multistage_simulation.log"
         },
     },
@@ -62,7 +62,7 @@ def analyze_aorm_log(scenario_key, log_file):
     """
     total_alerts = 0
     attack_detected = False
-    indicator = CONFIG["attack_scenarios"][scenario_key]["aorm_indicator"]
+    indicators = CONFIG["attack_scenarios"][scenario_key]["aorm_indicators"]
     
     print(f"  [DEBUG] Analyzing log file: '{log_file}' for indicator: '{indicator}'")
     if not os.path.exists(log_file):
@@ -76,11 +76,15 @@ def analyze_aorm_log(scenario_key, log_file):
         if "🚨" in line:
             total_alerts += 1
             context_window = log_lines[max(0, i-5):i+1] # 경고 라인까지 포함
-            for context_line in context_window:
-                if indicator in context_line:
-                    attack_detected = True
-                    print(f"  [DEBUG] Attack DETECTED. Indicator '{indicator}' found near alert.")
-                    break
+            for indicator in indicators:
+                for context_line in context_window:
+                    if indicator in context_line:
+                        attack_detected = True
+                        print(f"  [DEBUG] Attack DETECTED. Indicator '{indicator}' found near alert.")
+                        break # 내부 루프 탈출
+                if attack_detected:
+                    break # 외부 루프 탈출
+            
             if attack_detected:
                 break # 공격이 탐지되었으면 더 이상 다른 경고를 분석할 필요 없음
     
