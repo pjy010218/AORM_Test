@@ -1,7 +1,22 @@
 # main.py
 
 from bcc import BPF
-from aorm_engine import process_event_from_kernel
+from aorm_engine import process_event_from_kernel, behavior_profiler # behavior_profiler 임포트
+import signal # signal 모듈 임포트
+import sys
+
+keep_running = True
+
+def handle_exit(signum, frame):
+    """
+    [추가됨] SIGINT 신호를 받았을 때 호출될 핸들러.
+    안전하게 종료될 수 있도록 플래그만 변경합니다.
+    """
+    global keep_running
+    print("\n[INFO] Shutdown signal received. Finishing current task and exiting...")
+    keep_running = False
+
+signal.signal(signal.SIGINT, handle_exit)
 
 # BPF C 코드를 수정하여 스택 대신 BPF 맵을 사용
 bpf_program = """
@@ -120,9 +135,15 @@ def process_and_analyze(cpu, data, size):
     process_event_from_kernel(event)
 
 b["events"].open_perf_buffer(process_and_analyze)
+print("✅ BPF probes attached. Agent is now actively listening for kernel events.")
 
 try:
-    while True:
+    while keep_running: # 전역 플래그를 확인하는 조건으로 변경
         b.perf_buffer_poll()
-except KeyboardInterrupt:
-    print("\n👋 AORM Agent stopped.")
+except Exception as e:
+    print(f"[ERROR] An unexpected error occurred in the main loop: {e}")
+finally:
+    # 루프가 정상적으로 종료되면 (keep_running == False), 프로필을 저장합니다.
+    print("[INFO] Main loop exited. Saving final behavior profile...")
+    behavior_profiler.save_profile() # profiler.py에 추가한 메서드 호출
+    print("\n👋 AORM Agent stopped gracefully.")

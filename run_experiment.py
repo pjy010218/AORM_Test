@@ -52,7 +52,7 @@ def stop_process(p_object, command_name):
 
 def reset_environment():
     print("  -> Resetting environment...")
-    for f in [CONFIG["aorm_agent_log"], CONFIG["profile_file"], "simulation.log"]:
+    for f in [CONFIG["profile_file"], "simulation.log"]:
         if os.path.exists(f):
             os.remove(f)
 
@@ -64,7 +64,7 @@ def analyze_aorm_log(scenario_key, log_file):
     attack_detected = False
     indicators = CONFIG["attack_scenarios"][scenario_key]["aorm_indicators"]
     
-    print(f"  [DEBUG] Analyzing log file: '{log_file}' for indicator: '{indicator}'")
+    print(f"  [DEBUG] Analyzing log file: '{log_file}' for indicators: {indicators}")
     if not os.path.exists(log_file):
         print(f"  [DEBUG] Log file not found. Marking as FN.")
         return {'tp': 0, 'fp': 0, 'fn': 1}

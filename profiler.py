@@ -22,13 +22,17 @@ class HybridProfiler:
             return raw_data
         
     def _save(self):
-        data_to_save = {}
-        for key, value in self.profile_data.items():
-            temp_value = value.copy()
-            temp_value['timestamps'] = list(temp_value['timestamps'])
-            data_to_save[key] = temp_value
+        # 이 함수는 이제 save_profile()로 이름이 변경되어 외부에서 호출됩니다.
         with open(self.profile_path, 'w') as f:
-            json.dump(data_to_save, f, indent=4)
+            json.dump(self.profile, f, indent=4)
+
+    def save_profile(self):
+        """
+        [수정됨] 프로필을 파일에 저장하는 공개 메서드.
+        프로세스 종료 시 호출하기 위함.
+        """
+        print("  [INFO] Saving behavior profile to disk...")
+        self._save()
 
     def _update_stats(self, event_key):
         timestamps = self.profile_data[event_key]['timestamps']
