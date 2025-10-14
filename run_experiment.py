@@ -49,11 +49,38 @@ def run_command(command, log_file=None, wait=False):
             return subprocess.Popen(args, stdout=f, stderr=subprocess.STDOUT)
 
 def stop_process(p_object, command_name):
-    if p_object and p_object.poll() is None:
-        print(f"  -> Stopping: {command_name} (PID: {p_object.pid})")
-        # 'kill -9' (SIGKILL) 대신 'kill -INT' (SIGINT)를 사용하여 정상 종료 유도
-        subprocess.run(f"sudo kill -INT {p_object.pid}".split(), capture_output=True)
-        p_object.wait() # 프로세스가 스스로 종료될 때까지 기다림
+    """
+    [수정됨] 지정된 시간 내에 종료되지 않으면 강제 종료하여 무한 실행을 방지합니다.
+    """
+    if not p_object or p_object.poll() is not None:
+        # 이미 종료되었으면 아무것도 하지 않음
+        return
+
+    print(f"  -> Stopping: {command_name} (PID: {p_object.pid})")
+    
+    # 1. 프로세스 그룹 전체에 '정상 종료' 신호(SIGINT)를 보냄
+    try:
+        os.killpg(p_object.pid, signal.SIGINT)
+        # 5초 동안 정상적으로 종료되기를 기다림
+        p_object.wait(timeout=5)
+        print(f"  -> {command_name} terminated gracefully.")
+        return
+    except subprocess.TimeoutExpired:
+        # 5초가 지나도 종료되지 않은 경우
+        print(f"  [WARN] {command_name} did not respond to graceful shutdown. Escalating to SIGKILL.")
+    except Exception:
+        # 프로세스가 그 사이에 이미 사라진 경우 등
+        pass
+
+    # 2. 그래도 종료되지 않았다면, '강제 종료' 신호(SIGKILL)를 보냄
+    if p_object.poll() is None:
+        try:
+            os.killpg(p_object.pid, signal.SIGKILL)
+            # 강제 종료가 처리될 시간을 잠시 기다림
+            p_object.wait(timeout=2)
+            print(f"  -> {command_name} was forcefully terminated.")
+        except Exception:
+            pass
 
 def reset_environment():
     print("  -> Resetting environment...")
