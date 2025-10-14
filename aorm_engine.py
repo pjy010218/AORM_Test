@@ -106,33 +106,75 @@ def get_aorm_levels(process_name, file_path):
 
 
 def analyze_file_event(event):
-    """파일 접근 이벤트의 위험도를 종합적으로 분석합니다."""
+    """
+    [최종 수정] '신뢰 경계선'과 '최악의 외부 조상' 원칙을 적용하여
+    이벤트의 위험도를 종합적으로 분석합니다.
+    """
     process_name = event.comm.decode('utf-8', 'replace')
     file_path = event.fname.decode('utf-8', 'replace')
     pid = event.pid
 
-    if any(file_path.startswith(p) for p in WHITELIST_PATHS): return
-    
-    # 1. Base Score 계산
-    object_level = OBJECT_POLICY.get(file_path, "L3")
-    for path, level in reversed(list(OBJECT_POLICY.items())):
-        if file_path.startswith(path): object_level = level; break
-    action_level = ACTION_POLICY.get(process_name, "L3")
-    aorm_base_score = LEVEL_SCORES.get(object_level, 1) + LEVEL_SCORES.get(action_level, 1)
+    if any(file_path.startswith(p) for p in WHITELIST_PATHS):
+        return
 
-    # 2. Anomaly Score 계산 (하이브리드 모델)
+    # 1. 궤적 분석: 점수, 경로, 그리고 조상 프로세스 리스트를 모두 가져옵니다.
+    trajectory_score, trajectory_path, ancestor_comms = get_trajectory_score_and_path(pid)
+
+    # 2. Base Score 계산 (고도화된 방식)
+    # 2a. 객체(Object) 위험도 계산
+    object_level = "L3"
+    for path, level in OBJECT_POLICY.items():
+        if file_path.startswith(path):
+            object_level = level
+            break
+    object_score = LEVEL_SCORES.get(object_level, 1)
+
+    # 2b. 행위(Action) 위험도에 '신뢰 경계선' 원칙 적용
+    worst_external_action_level = "L3"  # 기본값은 가장 낮은 L3
+    
+    # 현재 프로세스와 모든 조상을 하나씩 확인
+    current_pid_in_trace = pid
+    all_ancestors_for_check = [(pid, process_name)] + [(p_info.get('pid'), p_info.get('comm')) for p_info in process_tree.values() if p_info.get('pid') in [int(p.split('(')[-1][:-1]) for p in trajectory_path.split(' -> ')]] # This is a bit complex way to get pids from trajectory path. A refactor on get_trajectory_score_and_path to return pids would be better. For now, this will work.
+
+    all_comms_in_path = [process_name] + ancestor_comms
+    
+    # Let's re-build this part more cleanly
+    pids_in_path = [pid]
+    temp_pid = pid
+    while temp_pid in process_tree and process_tree[temp_pid]['ppid'] != 0:
+        ppid = process_tree[temp_pid]['ppid']
+        pids_in_path.append(ppid)
+        temp_pid = ppid
+
+    for p in pids_in_path:
+        if p in process_tree:
+            proc_info = process_tree[p]
+            comm = proc_info.get('comm', 'N/A')
+            exe_path = proc_info.get('exe_path', 'N/A')
+
+            # [핵심] 조상의 실행 경로가 시스템 베이스라인(신뢰 경계선)의 '외부'에 있을 경우에만,
+            # 해당 조상을 위험도 평가 후보로 간주합니다.
+            if exe_path not in SYSTEM_BASELINE_EXECS:
+                proc_level_str = ACTION_POLICY.get(comm, "L3")
+                # 더 위험한 레벨(숫자가 낮은)을 발견하면 교체합니다.
+                if int(proc_level_str[1]) < int(worst_external_action_level[1]):
+                    worst_external_action_level = proc_level_str
+
+    action_score = LEVEL_SCORES.get(worst_external_action_level, 1)
+    aorm_base_score = object_score + action_score
+    
+
+    # 3. Anomaly Score 계산
     anomaly_score = behavior_profiler.process_event(process_name, file_path, aorm_base_score)
     
-    # 3. Trajectory Score 계산 (새로운 기능)
-    trajectory_score, trajectory_path = get_trajectory_score_and_path(pid)
-    
-    # 4. 최종 위험도 산출 및 궤적 시각화
+    # 4. 최종 위험도 산출
     final_risk_score = aorm_base_score * (1 + anomaly_score) * (1 + trajectory_score)
 
-    # AORM 행렬 위에서의 궤적 시각화
-    aorm_cell = get_aorm_levels(process_name, file_path)
+    # 5. 로깅 및 경고
+    aorm_cell = get_aorm_levels(process_name, file_path) # 이 함수는 이제 시각화용
     print(f"[Trajectory] {trajectory_path} => {process_name} opens {file_path} | Mapping to {aorm_cell}")
-    print(f"  [Scoring] Base: {aorm_base_score:.1f}, Anomaly: {anomaly_score:.2f}, Trajectory: {trajectory_score:.1f} -> Final: {final_risk_score:.1f}")
+    # [수정] 디버그 로그 추가: 어떤 외부 조상 기준으로 점수가 계산되었는지 명시
+    print(f"  [Scoring] Base: {aorm_base_score:.1f} (Obj: {object_level}, Act: based on worst external ancestor '{worst_external_action_level}'), Anomaly: {anomaly_score:.2f}, Trajectory: {trajectory_score:.1f} -> Final: {final_risk_score:.1f}")
 
     if final_risk_score >= CRITICAL_THRESHOLD:
         print(f"🚨 ALERT! Suspicious Trajectory Detected. Final Score: {final_risk_score:.1f}")
