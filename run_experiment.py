@@ -35,13 +35,18 @@ CONFIG = {
 }
 # --- 2. 헬퍼 함수 정의 ---
 def run_command(command, log_file=None, wait=False):
+    """[수정됨] 비동기 실행을 위해 preexec_fn을 Popen에만 적용"""
     print(f"  -> Running: {command}")
     args = command.split()
     if wait:
         return subprocess.run(args, capture_output=True, text=True, check=False)
     else:
         f = open(log_file, 'w') if log_file else subprocess.DEVNULL
-        return subprocess.Popen(args, stdout=f, stderr=subprocess.STDOUT)
+        # sudo를 사용하는 에이전트와 시뮬레이터에만 preexec_fn 적용
+        if "sudo" in command:
+            return subprocess.Popen(args, stdout=f, stderr=subprocess.STDOUT, preexec_fn=os.setsid)
+        else:
+            return subprocess.Popen(args, stdout=f, stderr=subprocess.STDOUT)
 
 def stop_process(p_object, command_name):
     if p_object and p_object.poll() is None:
@@ -117,9 +122,10 @@ def calculate_final_metrics(results):
 
 # --- 3. 메인 실험 루프 ---
 def main():
-    """[수정됨] 실험 전체를 조율하고 결과를 출력합니다."""
+    """[최종 수정] '지능형 대기'를 통해 탐지 신뢰도를 확보한 실험을 조율합니다."""
     
-    # ... (FIM Baseline 생성은 동일) ...
+    print("="*10 + " Creating FIM Baseline " + "="*10)
+    run_command(f"{CONFIG['fim_baseline_script']} create", wait=True)
     results_by_system = {"aorm": [], "fim": []}
 
     # --- AORM 실험 ---
@@ -127,9 +133,9 @@ def main():
     for i in range(CONFIG['repetitions']):
         print(f"\n--- AORM Repetition {i+1}/{CONFIG['repetitions']} ---")
         
-        # --- 학습 단계 (모든 시나리오 시작 전 1회만 수행) ---
-        print("\n  --- Phase 1: Learning Normal Behavior (once per repetition) ---")
-        reset_environment() # behavior_profile.json 생성을 위해 초기화
+        # --- 1. 학습 단계 (반복마다 1회) ---
+        print("\n  --- Phase 1: Learning Normal Behavior ---")
+        reset_environment()
         learning_agent_proc = run_command(CONFIG["aorm_agent_cmd"], "learning.log")
         time.sleep(5)
         sim_proc = run_command(CONFIG["simulator_cmd"], "simulation.log")
@@ -139,27 +145,47 @@ def main():
         stop_process(learning_agent_proc, "Learning Agent")
         print("  -> Learning complete. 'behavior_profile.json' is ready.")
 
-        # --- 공격 탐지 단계 (시나리오별로 반복) ---
+        # --- 2. 공격 탐지 단계 (시나리오별) ---
         for name, scenario in CONFIG["attack_scenarios"].items():
             print(f"\n--- Running Scenario for AORM: {name} ---")
             
             attack_log_file = scenario["attack_log"]
-            # 이번 시나리오의 로그 파일만 삭제하여 깨끗한 상태에서 시작
             if os.path.exists(attack_log_file):
                 os.remove(attack_log_file)
             
-            # 공격 탐지 에이전트를 시나리오별 지정된 로그 파일에 기록하도록 실행
+            # 공격 탐지 에이전트 실행
             attack_agent_proc = run_command(CONFIG["aorm_agent_cmd"], attack_log_file)
-            print(f"  -> Attack detection agent is running. Logging to '{attack_log_file}'")
+            print(f"  -> Attack detection agent (PID: {attack_agent_proc.pid}) is running.")
             time.sleep(5)
             
-            print("  -> Executing attack scenario...")
-            run_command(scenario["cmd"], wait=True)
-            time.sleep(5)
+            # 공격 스크립트 '비동기' 실행
+            print("  -> Executing attack scenario in background...")
+            attack_proc = run_command(scenario["cmd"])
+
+            # ▼▼▼▼▼ [핵심] '지능형 대기' 로직 ▼▼▼▼▼
+            print(f"  -> Waiting for ALERT in '{attack_log_file}'...")
+            alert_found = False
+            timeout = 30  # 최대 30초간 대기
+            end_time = time.time() + timeout
             
+            while time.time() < end_time:
+                if os.path.exists(attack_log_file):
+                    with open(attack_log_file, 'r') as f:
+                        if "🚨" in f.read():
+                            print("  -> ✅ ALERT signal detected in log file!")
+                            alert_found = True
+                            break
+                time.sleep(1) # 1초마다 로그 파일 확인
+
+            if not alert_found:
+                print("  -> ❌ Timeout: No ALERT signal detected within 30 seconds.")
+            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
+            # 모든 관련 프로세스 정리
+            stop_process(attack_proc, "Attack Scenario")
             stop_process(attack_agent_proc, "AORM Agent")
             
-            # 해당 시나리오의 로그 파일을 분석
+            # 분석
             aorm_result = analyze_aorm_log(name, attack_log_file)
             results_by_system["aorm"].append(aorm_result)
             print(f"  -> AORM Analysis Result: {aorm_result}")
