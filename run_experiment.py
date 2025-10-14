@@ -34,8 +34,9 @@ def run_command(command, log_file=None, wait=False):
 def stop_process(p_object, command_name):
     if p_object and p_object.poll() is None:
         print(f"  -> Stopping: {command_name} (PID: {p_object.pid})")
-        subprocess.run(f"sudo kill -9 {p_object.pid}".split(), capture_output=True)
-        p_object.wait()
+        # 'kill -9' (SIGKILL) 대신 'kill -INT' (SIGINT)를 사용하여 정상 종료 유도
+        subprocess.run(f"sudo kill -INT {p_object.pid}".split(), capture_output=True)
+        p_object.wait() # 프로세스가 스스로 종료될 때까지 기다림
 
 def reset_environment():
     print("  -> Resetting environment...")
@@ -119,6 +120,11 @@ def main():
             print(f"  -> Learning phase for {CONFIG['learning_duration_seconds']} seconds...")
             time.sleep(CONFIG['learning_duration_seconds'])
             stop_process(sim_proc, "Simulator")
+
+            print("  [DEBUG] Learning phase finished. Clearing log before attack phase.")
+            # 공격 단계 시작 직전에 로그 파일을 초기화하여 오염을 방지
+            if os.path.exists(CONFIG["aorm_agent_log"]):
+                open(CONFIG["aorm_agent_log"], 'w').close()
             
             print("  -> Executing attack scenario...")
             run_command(scenario["cmd"], wait=True)
