@@ -218,30 +218,30 @@ def main():
             print(f"  -> AORM Analysis Result: {aorm_result}")
 
     # --- FIM 실험 ---
-    print("\n" + "="*20 + " Running FIM Experiment " + "="*20)
-    for i in range(CONFIG["repetitions"]):
-        print(f"\n--- FIM Repetition {i+1}/{CONFIG['repetitions']} ---")
-        for name, scenario in CONFIG["attack_scenarios"].items():
-            print(f"\n--- Running Scenario for FIM: {name} ---")
-            
-            # FIM 실험에서는 학습이나 AORM 에이전트가 필요 없으므로 환경만 초기화
-            reset_environment() 
-
-            # 공격 스크립트를 'no-cleanup' 인자로 실행하여 탬퍼링된 상태 유지
-            attack_cmd_for_fim = f"{scenario['cmd']} no-cleanup"
-            print("  -> Executing attack scenario (no-cleanup mode)...")
-            run_command(attack_cmd_for_fim, wait=True)
-            
-            # 탬퍼링된 상태에서 FIM 검사 실행
-            fim_proc = run_command(f"{CONFIG['fim_baseline_script']} check", wait=True)
-            fim_result = analyze_fim_log(fim_proc.stdout, name)
+    # FIM 실험은 1회만 수행 (결정론적이므로)
+    print("\n" + "="*20 + " Running FIM Experiment (Single Run) " + "="*20)
+    
+    for name, scenario in CONFIG["attack_scenarios"].items():
+        print(f"\n--- Running Scenario for FIM: {name} ---")
+        reset_environment()
+        
+        # 공격 실행
+        attack_cmd_for_fim = f"{scenario['cmd']} no-cleanup"
+        run_command(attack_cmd_for_fim, wait=True)
+        
+        # FIM 검사
+        fim_proc = run_command(f"{CONFIG['fim_baseline_script']} check", wait=True)
+        fim_result = analyze_fim_log(fim_proc.stdout, name)
+        
+        # FIM은 반복 횟수만큼 결과를 복제하여 통계 비교를 공정하게
+        for _ in range(CONFIG["repetitions"]):
             results_by_system["fim"].append(fim_result)
-            print(f"  -> FIM Analysis Result: {fim_result}")
-
-            # 시스템 원상 복구를 위해 'cleanup' 모드만 안전하게 호출
-            print("  -> Restoring system state...")
-            cleanup_cmd = f"{scenario['cmd']} cleanup"
-            run_command(cleanup_cmd, wait=True)
+        
+        print(f"  -> FIM Analysis Result: {fim_result}")
+        
+        # 복구
+        cleanup_cmd = f"{scenario['cmd']} cleanup"
+        run_command(cleanup_cmd, wait=True)
 
     # --- 최종 결과 집계 및 출력 ---
     print(f"\n{'='*20} Final Experiment Summary {'='*20}")
