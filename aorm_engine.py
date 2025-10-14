@@ -56,30 +56,41 @@ LEVEL_NAMES = ["L0", "L1", "L2", "L3"]
 # --- 핵심 분석 함수 ---
 
 def get_trajectory_score_and_path(pid):
-    """프로세스 트리를 재귀적으로 탐색하여 조상 경로와 궤적 점수를 반환합니다."""
+    """개선된 궤적 점수 계산"""
     path = []
     current_pid = pid
-    max_score = 0.1 # 기본 점수 (신뢰)
-
-    # 최대 10단계까지만 조상 추적 (무한 루프 방지)
-    for _ in range(10):
-        if current_pid in process_tree:
-            proc_info = process_tree[current_pid]
-            comm = proc_info['comm']
-            exe_path = proc_info['exe_path']
+    trajectory_score = 0.1  # 기본 신뢰 점수
+    untrusted_depth = 0  # 신뢰할 수 없는 조상의 깊이
+    
+    for depth in range(10):
+        if current_pid not in process_tree:
+            break
             
-            path.append(f"{comm}({current_pid})")
+        proc_info = process_tree[current_pid]
+        comm = proc_info['comm']
+        exe_path = proc_info['exe_path']
+        
+        path.append(f"{comm}({current_pid})")
+        
+        if exe_path not in SYSTEM_BASELINE_EXECS:
+            untrusted_depth = depth + 1
             
-            # 조상 중에 신뢰할 수 없는 출처가 하나라도 있으면 점수를 1.0으로 설정
-            if exe_path not in SYSTEM_BASELINE_EXECS:
-                max_score = 1.0
-
-            current_pid = proc_info['ppid']
-            if current_pid == 0: break
-        else:
-            break # 부모를 더 이상 추적할 수 없음
-            
-    return max_score, " -> ".join(reversed(path))
+            # 깊이에 따른 차등 가중치
+            # 부모가 외부 출처일수록 더 의심스러움
+            depth_weight = 1.0 / (depth + 1)
+            trajectory_score = max(trajectory_score, 0.5 + (0.5 * depth_weight))
+        
+        current_pid = proc_info['ppid']
+        if current_pid == 0:
+            break
+    
+    # 조상 중 외부 출처가 있고, 현재 프로세스도 외부 출처면 최대 점수
+    if untrusted_depth == 1 and path:
+        current_exe = process_tree[pid]['exe_path']
+        if current_exe not in SYSTEM_BASELINE_EXECS:
+            trajectory_score = 1.0
+    
+    return trajectory_score, " -> ".join(reversed(path))
 
 
 def get_aorm_levels(process_name, file_path):
