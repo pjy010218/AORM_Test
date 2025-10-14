@@ -16,18 +16,21 @@ CONFIG = {
     "attack_scenarios": {
         "1_recon": {
             "cmd": "./attack_recon.sh", 
-            "aorm_indicators": ["find /", "cat /etc/passwd"],
-            "attack_log": "attack_recon_simulation.log" # 시나리오별 로그 파일 지정
+            "aorm_indicators": ["find", "/etc/passwd", "/tmp/recon_results.txt"],
+            "attack_log": "attack_recon_simulation.log", # 시나리오별 로그 파일 지정
+            "fim_expected_alerts": 1
         },
         "2_rootkit": {
             "cmd": "sudo ./attack_rootkit.sh", 
-            "aorm_indicators": ["/bin/ls", "mv /bin/ls", "cp /tmp/malicious_ls"],
-            "attack_log": "attack_rootkit_simulation.log"
+            "aorm_indicators": ["mv", "cp", "/bin/ls"],
+            "attack_log": "attack_rootkit_simulation.log",
+            "fim_expected_alerts": 2
         },
         "3_multistage": {
             "cmd": "./attack_multistage.sh", 
-            "aorm_indicators": ["payload", "wget", "/tmp/payload"],
-            "attack_log": "attack_multistage_simulation.log"
+            "aorm_indicators": ["wget", "chmod", "/tmp/payload"],
+            "attack_log": "attack_multistage_simulation.log",
+            "fim_expected_alerts": 1
         },
     },
     # FIM 관련 설정은 변경 없음
