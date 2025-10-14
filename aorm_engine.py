@@ -11,6 +11,36 @@ behavior_profiler = HybridProfiler(base_score_threshold=BASE_SCORE_THRESHOLD)
 # 프로세스 트리: {pid: {'ppid': ppid, 'comm': comm, 'exe_path': path}}
 process_tree = {}
 
+def build_initial_process_tree():
+    """
+    [추가됨] /proc 파일시스템을 스캔하여 에이전트 시작 시점의
+    프로세스 트리를 미리 구축합니다.
+    """
+    print("  [INFO] Building initial process tree from /proc...")
+    for pid in os.listdir('/proc'):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f'/proc/{pid}/status', 'r') as f:
+                ppid = -1
+                comm = "N/A"
+                for line in f:
+                    if line.startswith('Name:'):
+                        comm = line.split(':', 1)[1].strip()
+                    elif line.startswith('PPid:'):
+                        ppid = int(line.split(':', 1)[1].strip())
+                
+                exe_path = os.readlink(f'/proc/{pid}/exe')
+                process_tree[int(pid)] = {'ppid': ppid, 'comm': comm, 'exe_path': exe_path}
+        except (IOError, OSError):
+            # 권한 문제나 프로세스가 이미 종료된 경우 등은 무시
+            continue
+    print(f"  [INFO] Initial process tree built. {len(process_tree)} processes loaded.")
+
+# ▼▼▼▼▼ 에이전트 초기화 시점에 함수 호출 ▼▼▼▼▼
+build_initial_process_tree()
+# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
 SYSTEM_BASELINE_EXECS = set()
 if os.path.exists('system_baseline.json'):
     with open('system_baseline.json', 'r') as f:
