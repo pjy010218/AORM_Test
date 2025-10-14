@@ -54,14 +54,31 @@ EOF
 
 cleanup() {
     log_attack "Cleanup: Restoring system..."
+    
+    # 1. 백업이 있으면 복구
     if [ -f "$REAL_LS_PATH.bak" ]; then
-        mv $REAL_LS_PATH.bak $REAL_LS_PATH
+        mv -f $REAL_LS_PATH.bak $REAL_LS_PATH
         log_attack "Original '$REAL_LS_PATH' restored."
     fi
+    
+    # 2. 악성 파일 제거
     rm -f $MALICIOUS_LS_PATH
     rm -f $ROOTKIT_LOG
-    log_attack "Temporary files removed."
+    
+    # 3. 권한 복구 (원본 ls의 권한으로)
+    if [ -f "$REAL_LS_PATH" ]; then
+        chmod 755 $REAL_LS_PATH
+        chown root:root $REAL_LS_PATH
+    fi
+    
+    log_attack "Cleanup completed."
 }
+
+# 스크립트 시작 시 강제 cleanup 옵션
+if [ "$1" == "force-cleanup" ]; then
+    cleanup
+    exit 0
+fi
 
 # --- 메인 실행 로직 ---
 case "$1" in
