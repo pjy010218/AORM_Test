@@ -192,7 +192,7 @@ def main():
 
     # --- 최종 결과 집계 및 출력 ---
     print(f"\n{'='*20} Final Experiment Summary {'='*20}")
-    
+
     aorm_metrics = calculate_final_metrics(results_by_system["aorm"])
     fim_metrics = calculate_final_metrics(results_by_system["fim"])
 
@@ -200,7 +200,22 @@ def main():
         "AORM-TS-P": aorm_metrics,
         "Traditional_FIM": fim_metrics
     }
+
+    # 1. 화면에 최종 요약 출력 (기존과 동일)
     print(json.dumps(summary, indent=4))
 
+    # 2. 파일에 최종 요약 저장 (추가된 부분)
+    summary_file_path = "experiment_summary.txt"
+    try:
+        with open(summary_file_path, 'w') as f:
+            json.dump(summary, f, indent=4)
+        print(f"\n✅ Successfully saved final results to '{summary_file_path}'")
+    except Exception as e:
+        print(f"\n❌ Failed to save results to file: {e}")
+
 if __name__ == "__main__":
+    # 스크립트가 root 권한으로 실행되었는지 확인
+    if os.geteuid() != 0:
+        print("❌ This script must be run as root. Please use 'sudo python3 run_experiment.py'")
+        exit(1)
     main()

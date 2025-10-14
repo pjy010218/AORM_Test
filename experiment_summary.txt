@@ -1,36 +1,18 @@
-========== Creating FIM Baseline ==========
-  -> Running: sudo python3 fim_baseline.py create
-
-==================== Running AORM Experiment ====================
-
---- AORM Repetition 1/5 ---
-
---- Running Scenario for AORM: 1_recon ---
-  -> Resetting environment...
-  -> Running: sudo python3 -u main.py
-  -> Running: sudo stdbuf -oL ./simulate_normal.sh
-  -> Learning phase for 300 seconds...
-  -> Stopping: Simulator (PID: 19269)
-  [DEBUG] Learning phase finished. Clearing log before attack phase.
-  -> Executing attack scenario...
-  -> Running: ./attack_recon.sh
-  -> Stopping: AORM Agent (PID: 19262)
-  -> AORM Analysis Result: {'tp': 0, 'fp': 0, 'fn': 1}
-
---- Running Scenario for AORM: 2_rootkit ---
-  -> Resetting environment...
-  -> Running: sudo python3 -u main.py
-  -> Running: sudo stdbuf -oL ./simulate_normal.sh
-  -> Learning phase for 300 seconds...
-  -> Stopping: Simulator (PID: 19430)
-  [DEBUG] Learning phase finished. Clearing log before attack phase.
-  -> Executing attack scenario...
-  -> Running: sudo ./attack_rootkit.sh
-  -> Stopping: AORM Agent (PID: 19427)
-  -> AORM Analysis Result: {'tp': 0, 'fp': 30, 'fn': 1}
-
---- Running Scenario for AORM: 3_multistage ---
-  -> Resetting environment...
-  -> Running: sudo python3 -u main.py
-  -> Running: sudo stdbuf -oL ./simulate_normal.sh
-  -> Learning phase for 300 seconds...
+{
+    "AORM-TS-P": {
+        "TP": 0,
+        "FP": 0,
+        "FN": 15,
+        "precision": "0.00%",
+        "recall": "0.00%",
+        "f1_score": "0.00%"
+    },
+    "Traditional_FIM": {
+        "TP": 5,
+        "FP": 10,
+        "FN": 10,
+        "precision": "33.33%",
+        "recall": "33.33%",
+        "f1_score": "33.33%"
+    }
+}
