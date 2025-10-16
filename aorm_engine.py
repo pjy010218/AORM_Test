@@ -6,13 +6,65 @@ import os
 import time
 import re
 from profiler import HybridProfiler
+from collections import Counter
 
 # --- 0. 초기화 및 설정 ---
+AUTO_WHITELIST_THRESHOLD = 10
+AUTO_WHITELIST_PATHS = set()
+AUTO_WHITELIST_COMMS = set()
 BASE_SCORE_THRESHOLD = 8.0
 CRITICAL_THRESHOLD = 12.0
 behavior_profiler = HybridProfiler(base_score_threshold=BASE_SCORE_THRESHOLD)
 
 process_tree = {}
+
+def build_dynamic_whitelist(profile_path="behavior_profile.json"):
+    """
+    behavior_profile.json에서 정상 행위 빈도를 분석해
+    자동 화이트리스트를 생성합니다.
+    """
+    global AUTO_WHITELIST_PATHS, AUTO_WHITELIST_COMMS
+
+    if not os.path.exists(profile_path):
+        print(f"[WARN] No profile found at {profile_path}, skipping auto-whitelist build.")
+        return
+
+    with open(profile_path, "r") as f:
+        try:
+            profile_data = json.load(f)
+        except Exception as e:
+            print(f"[ERROR] Failed to parse behavior profile: {e}")
+            return
+
+    # 정상 학습에서 등장한 파일 경로/명령어의 빈도를 집계
+    file_counter = Counter()
+    comm_counter = Counter()
+
+    for entry in profile_data.get("events", []):
+        fname = entry.get("file", "")
+        comm = entry.get("comm", "")
+        if fname:
+            file_counter[fname] += 1
+        if comm:
+            comm_counter[comm] += 1
+
+    # 임계치 이상인 파일/프로세스를 화이트리스트에 추가
+    for path, count in file_counter.items():
+        if count >= AUTO_WHITELIST_THRESHOLD:
+            AUTO_WHITELIST_PATHS.add(path)
+
+    for comm, count in comm_counter.items():
+        if count >= AUTO_WHITELIST_THRESHOLD:
+            AUTO_WHITELIST_COMMS.add(comm)
+
+    print(f"✅ Dynamic whitelist built: {len(AUTO_WHITELIST_COMMS)} comms, {len(AUTO_WHITELIST_PATHS)} paths")
+
+# 기존 화이트리스트에 병합
+def apply_dynamic_whitelist():
+    global WHITELIST_PATHS, SYSTEM_COMM_WHITELIST
+    WHITELIST_PATHS = tuple(set(WHITELIST_PATHS) | AUTO_WHITELIST_PATHS)
+    SYSTEM_COMM_WHITELIST.update(AUTO_WHITELIST_COMMS)
+    print(f"✅ Applied dynamic whitelist (total comms={len(SYSTEM_COMM_WHITELIST)}, paths={len(WHITELIST_PATHS)})")
 
 def build_initial_process_tree():
     print("  [INFO] Building initial process tree from /proc...")
