@@ -51,18 +51,35 @@ def run_command(command, log_file=None, wait=False):
             return subprocess.Popen(args, stdout=f, stderr=subprocess.STDOUT)
 
 def stop_process(p_object, command_name):
-    """프로세스 강제 종료 안전화"""
-    if not p_object or p_object.poll() is not None:
+    """프로세스 강제 종료 안전화 (이미 종료된 프로세스도 무시)"""
+    if not p_object:
         return
+    try:
+        if p_object.poll() is not None:
+            # 이미 종료됨
+            print(f"  -> {command_name} already exited.")
+            return
+    except Exception:
+        return
+
     print(f"  -> Stopping: {command_name} (PID: {p_object.pid})")
     try:
         os.killpg(p_object.pid, signal.SIGINT)
         p_object.wait(timeout=5)
         print(f"  -> {command_name} terminated gracefully.")
+    except ProcessLookupError:
+        # 이미 프로세스가 종료된 상태
+        print(f"  -> {command_name} already terminated (no such PID).")
     except subprocess.TimeoutExpired:
         print(f"  [WARN] {command_name} not responding. Sending SIGKILL.")
-        os.killpg(p_object.pid, signal.SIGKILL)
-        p_object.wait(timeout=2)
+        try:
+            os.killpg(p_object.pid, signal.SIGKILL)
+            p_object.wait(timeout=2)
+            print(f"  -> {command_name} was forcefully terminated.")
+        except ProcessLookupError:
+            print(f"  -> {command_name} already gone during SIGKILL attempt.")
+    except Exception as e:
+        print(f"  [WARN] Unexpected error stopping {command_name}: {e}")
 
 def reset_environment():
     """기존 로그 및 프로파일 삭제"""
