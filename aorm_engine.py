@@ -1,198 +1,286 @@
 # aorm_engine.py
-
+# Patched version with robust trajectory extraction and smarter scoring.
 import json
 import os
+import time
 from profiler import HybridProfiler
 
-# --- 글로벌 변수 및 초기화 ---
+# --- configuration & initialization ---
 BASE_SCORE_THRESHOLD = 8.0
 behavior_profiler = HybridProfiler(base_score_threshold=BASE_SCORE_THRESHOLD)
 
-# 프로세스 트리: {pid: {'ppid': ppid, 'comm': comm, 'exe_path': path}}
+# process_tree: { pid: {'ppid': ppid, 'comm': comm, 'exe_path': path} }
 process_tree = {}
 
 def build_initial_process_tree():
     """
-    [추가됨] /proc 파일시스템을 스캔하여 에이전트 시작 시점의
-    프로세스 트리를 미리 구축합니다.
+    Scan /proc at agent startup to populate an initial process tree.
+    Non-fatal on permission errors or rapidly-exiting processes.
     """
     print("  [INFO] Building initial process tree from /proc...")
-    for pid in os.listdir('/proc'):
-        if not pid.isdigit():
+    for entry in os.listdir('/proc'):
+        if not entry.isdigit():
             continue
+        pid = int(entry)
         try:
-            with open(f'/proc/{pid}/status', 'r') as f:
-                ppid = -1
-                comm = "N/A"
+            status_path = f'/proc/{pid}/status'
+            exe_path = None
+            ppid = -1
+            comm = "N/A"
+            with open(status_path, 'r') as f:
                 for line in f:
                     if line.startswith('Name:'):
                         comm = line.split(':', 1)[1].strip()
                     elif line.startswith('PPid:'):
-                        ppid = int(line.split(':', 1)[1].strip())
-                
+                        try:
+                            ppid = int(line.split(':', 1)[1].strip())
+                        except Exception:
+                            ppid = -1
+            try:
                 exe_path = os.readlink(f'/proc/{pid}/exe')
-                process_tree[int(pid)] = {'ppid': ppid, 'comm': comm, 'exe_path': exe_path}
+            except Exception:
+                exe_path = ''
+            process_tree[pid] = {'ppid': ppid, 'comm': comm, 'exe_path': exe_path}
         except (IOError, OSError):
-            # 권한 문제나 프로세스가 이미 종료된 경우 등은 무시
+            # permission issues or process disappeared
             continue
     print(f"  [INFO] Initial process tree built. {len(process_tree)} processes loaded.")
 
-# ▼▼▼▼▼ 에이전트 초기화 시점에 함수 호출 ▼▼▼▼▼
+# Build initial tree once
 build_initial_process_tree()
-# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
+# Load system baseline execs if present
 SYSTEM_BASELINE_EXECS = set()
 if os.path.exists('system_baseline.json'):
-    with open('system_baseline.json', 'r') as f:
-        SYSTEM_BASELINE_EXECS = set(json.load(f).keys())
+    try:
+        with open('system_baseline.json', 'r') as f:
+            SYSTEM_BASELINE_EXECS = set(json.load(f).keys())
+    except Exception:
+        SYSTEM_BASELINE_EXECS = set()
 
+# Thresholds and policy maps
 CRITICAL_THRESHOLD = 12.0
 WHITELIST_PATHS = ('/proc/', '/lib/', '/usr/lib/', '/etc/ld.so.cache',)
-OBJECT_POLICY = {"/etc/shadow": "L0", "/etc/passwd": "L0", "/etc/sudoers": "L0", "bin": "L1", "/usr/bin": "L1", "/sbin": "L1", "/root/": "L1", "/etc/": "L2", "/var/log/": "L3", "/tmp/": "L3",}
-ACTION_POLICY = {"bash": "L2", "cat": "L3", "sshd": "L1", "vim": "L2", "rm": "L1", "mv": "L1", "cp": "L1", "nano": "L2", "systemd": "L0", "sudo": "L0", "find": "L3", "python3": "L2", "perl": "L2", "gcc": "L2", "g++": "L2", "make": "L2", "curl": "L2", "wget": "L2",}
+OBJECT_POLICY = {
+    "/etc/shadow": "L0",
+    "/etc/passwd": "L0",
+    "/etc/sudoers": "L0",
+    "bin": "L1",
+    "/usr/bin": "L1",
+    "/sbin": "L1",
+    "/root/": "L1",
+    "/etc/": "L2",
+    "/var/log/": "L3",
+    "/tmp/": "L3",
+}
+ACTION_POLICY = {
+    "bash": "L2", "cat": "L3", "sshd": "L1", "vim": "L2", "rm": "L1", "mv": "L1",
+    "cp": "L1", "nano": "L2", "systemd": "L0", "sudo": "L0", "find": "L3",
+    "python3": "L2", "perl": "L2", "gcc": "L2", "g++": "L2", "make": "L2",
+    "curl": "L2", "wget": "L2",
+}
 LEVEL_SCORES = {"L0": 10, "L1": 7, "L2": 4, "L3": 1}
 LEVEL_NAMES = ["L0", "L1", "L2", "L3"]
 
-# --- 핵심 분석 함수 ---
+# ---- Helper utilities ----
+def safe_str(v):
+    """Return a native string for bytes/str/None."""
+    if v is None:
+        return ""
+    if isinstance(v, bytes):
+        try:
+            return v.decode('utf-8', errors='replace')
+        except Exception:
+            return str(v)
+    return str(v)
 
-def get_trajectory_score_and_path(pid):
-    """개선된 궤적 점수 계산 (조상 comm 목록 포함)"""
+# --- Trajectory analysis (robust) ---
+def get_trajectory_score_and_path(pid, max_depth=12):
+    """
+    Return: (trajectory_score: float, trajectory_path_str: str,
+             ancestor_comms: list[str], ancestor_pids: list[int])
+
+    Produces robust ancestor PID and comm lists and a heuristic score:
+    - system daemons are special-cased (not sufficient evidence alone)
+    - score increases with number of external ancestors and their proximity
+    """
     path = []
     ancestor_comms = []
+    ancestor_pids = []
     current_pid = pid
-    trajectory_score = 0.1  # 기본 신뢰 점수
-    untrusted_depth = 0
+    trajectory_score = 0.0
+    untrusted_first_depth = None
+    untrusted_count = 0
 
-    for depth in range(10):
+    # system comms that shouldn't by themselves be considered malicious
+    system_comm_whitelist = set([
+        "systemd", "init", "kthreadd", "rcu_sched", "kworker", "watchdog", "sshd"
+    ])
+
+    for depth in range(max_depth):
         if current_pid not in process_tree:
             break
 
         proc_info = process_tree[current_pid]
-        comm = proc_info['comm']
-        exe_path = proc_info['exe_path']
+        comm = proc_info.get('comm', 'N/A')
+        exe_path = proc_info.get('exe_path', '')
+
         path.append(f"{comm}({current_pid})")
         ancestor_comms.append(comm)
+        ancestor_pids.append(current_pid)
 
-        if exe_path not in SYSTEM_BASELINE_EXECS:
-            untrusted_depth = depth + 1
-            depth_weight = 1.0 / (depth + 1)
-            trajectory_score = max(trajectory_score, 0.5 + (0.5 * depth_weight))
+        # consider external if not in baseline
+        is_external = (exe_path not in SYSTEM_BASELINE_EXECS and exe_path != '')
 
-        current_pid = proc_info['ppid']
-        if current_pid == 0:
+        # ignore common kernel threads / system workers as "external" indicators
+        if is_external and comm not in system_comm_whitelist:
+            untrusted_count += 1
+            if untrusted_first_depth is None:
+                untrusted_first_depth = depth
+
+        # move to parent
+        current_pid = proc_info.get('ppid', 0)
+        if not current_pid or current_pid == 0:
             break
 
-    # 조상 중 외부 출처가 있고, 현재 프로세스도 외부 출처면 최대 점수
-    if untrusted_depth == 1 and path:
-        current_exe = process_tree[pid]['exe_path']
-        if current_exe not in SYSTEM_BASELINE_EXECS:
-            trajectory_score = 1.0
+    # scoring heuristic:
+    if untrusted_count == 0:
+        trajectory_score = 0.0
+    else:
+        base = 0.4
+        count_factor = min(0.5, 0.12 * untrusted_count)
+        proximity = 0.0
+        if untrusted_first_depth is not None:
+            proximity = 0.5 / (untrusted_first_depth + 1)
+        trajectory_score = min(1.0, base + count_factor + proximity)
 
-    trajectory_path = " -> ".join(reversed(path))
-    return trajectory_score, trajectory_path, list(reversed(ancestor_comms))
+    trajectory_path_str = " -> ".join(reversed(path)) if path else ""
+    # Return reversed lists so trajectory reads from root -> ... -> subject
+    return trajectory_score, trajectory_path_str, list(reversed(ancestor_comms)), list(reversed(ancestor_pids))
 
+# --- AORM level mapping helper ---
 def get_aorm_levels(process_name, file_path):
-    """AORM 레벨을 문자열로 반환합니다."""
-    obj_level_idx = LEVEL_NAMES.index(OBJECT_POLICY.get(file_path, "L3"))
-    act_level_idx = LEVEL_NAMES.index(ACTION_POLICY.get(process_name, "L3"))
-    # 더 구체적인 정책 매칭 로직 (이전과 동일)
-    for path, level in reversed(list(OBJECT_POLICY.items())):
-        if file_path.startswith(path):
-            obj_level_idx = LEVEL_NAMES.index(level)
+    """Return a string visualizing [ActionLevel, ObjectLevel] based on policies."""
+    # default to L3
+    obj_level = "L3"
+    for pref, lvl in OBJECT_POLICY.items():
+        if file_path.startswith(pref):
+            obj_level = lvl
             break
-    return f"[L{act_level_idx}, L{obj_level_idx}]"
+    # action level by process name (comm)
+    act_level = ACTION_POLICY.get(process_name, "L3")
 
+    # convert to indices for the same visualization as before
+    try:
+        obj_idx = LEVEL_NAMES.index(obj_level)
+    except ValueError:
+        obj_idx = LEVEL_NAMES.index("L3")
+    try:
+        act_idx = LEVEL_NAMES.index(act_level)
+    except ValueError:
+        act_idx = LEVEL_NAMES.index("L3")
 
+    return f"[L{act_idx}, L{obj_idx}]"
+
+# --- core analysis functions ---
 def analyze_file_event(event):
     """
-    [최종 수정] '신뢰 경계선'과 '최악의 외부 조상' 원칙을 적용하여
-    이벤트의 위험도를 종합적으로 분석합니다.
+    Analyze a file-related event (open/rename/unlink).
+    Uses object policy, action policy (applied to external ancestors), anomaly profiler,
+    and trajectory_score to compute final risk and optionally emit ALERT.
     """
-    process_name = event.comm.decode('utf-8', 'replace')
-    file_path = event.fname.decode('utf-8', 'replace')
-    pid = event.pid
+    # defensive extraction
+    process_name = safe_str(event.comm)
+    file_path = safe_str(event.fname)
+    pid = getattr(event, 'pid', None)
+    try:
+        pid = int(pid)
+    except Exception:
+        # can't interpret pid properly -> abort safe
+        print(f"[WARN] analyze_file_event: invalid pid '{pid}'")
+        return
 
+    # whitelist paths: ignore
     if any(file_path.startswith(p) for p in WHITELIST_PATHS):
         return
 
-    # 1. 궤적 분석: 점수, 경로, 그리고 조상 프로세스 리스트를 모두 가져옵니다.
-    trajectory_score, trajectory_path, ancestor_comms = get_trajectory_score_and_path(pid)
+    # 1) trajectory info
+    trajectory_score, trajectory_path, ancestor_comms, ancestor_pids = get_trajectory_score_and_path(pid)
 
-    # 2. Base Score 계산 (고도화된 방식)
-    # 2a. 객체(Object) 위험도 계산
+    # 2) object score
     object_level = "L3"
-    for path, level in OBJECT_POLICY.items():
-        if file_path.startswith(path):
-            object_level = level
+    for pref, lvl in OBJECT_POLICY.items():
+        if file_path.startswith(pref):
+            object_level = lvl
             break
     object_score = LEVEL_SCORES.get(object_level, 1)
 
-    # 2b. 행위(Action) 위험도에 '신뢰 경계선' 원칙 적용
-    worst_external_action_level = "L3"  # 기본값은 가장 낮은 L3
-    
-    # 현재 프로세스와 모든 조상을 하나씩 확인
-    current_pid_in_trace = pid
-    all_ancestors_for_check = [(pid, process_name)] + [(p_info.get('pid'), p_info.get('comm')) for p_info in process_tree.values() if p_info.get('pid') in [int(p.split('(')[-1][:-1]) for p in trajectory_path.split(' -> ')]] # This is a bit complex way to get pids from trajectory path. A refactor on get_trajectory_score_and_path to return pids would be better. For now, this will work.
-
-    all_comms_in_path = [process_name] + ancestor_comms
-    
-    # Let's re-build this part more cleanly
-    pids_in_path = [pid]
-    temp_pid = pid
-    while temp_pid in process_tree and process_tree[temp_pid]['ppid'] != 0:
-        ppid = process_tree[temp_pid]['ppid']
-        pids_in_path.append(ppid)
-        temp_pid = ppid
-
-    for p in pids_in_path:
-        if p in process_tree:
-            proc_info = process_tree[p]
-            comm = proc_info.get('comm', 'N/A')
-            exe_path = proc_info.get('exe_path', 'N/A')
-
-            # [핵심] 조상의 실행 경로가 시스템 베이스라인(신뢰 경계선)의 '외부'에 있을 경우에만,
-            # 해당 조상을 위험도 평가 후보로 간주합니다.
-            if exe_path not in SYSTEM_BASELINE_EXECS:
-                proc_level_str = ACTION_POLICY.get(comm, "L3")
-                # 더 위험한 레벨(숫자가 낮은)을 발견하면 교체합니다.
-                if int(proc_level_str[1]) < int(worst_external_action_level[1]):
-                    worst_external_action_level = proc_level_str
+    # 3) determine worst external action level among relevant ancestors
+    worst_external_action_level = "L3"
+    for anc_pid in ancestor_pids:
+        if anc_pid in process_tree:
+            proc_info = process_tree[anc_pid]
+            anc_comm = proc_info.get('comm', 'N/A')
+            anc_exe = proc_info.get('exe_path', '')
+            # only consider truly external (not in baseline and non-empty exe path)
+            if anc_exe and anc_exe not in SYSTEM_BASELINE_EXECS:
+                proc_level_str = ACTION_POLICY.get(anc_comm, "L3")
+                try:
+                    # compare severity by numeric index in "Lx"
+                    if int(proc_level_str[1]) < int(worst_external_action_level[1]):
+                        worst_external_action_level = proc_level_str
+                except Exception:
+                    # fallback ignore malformed policy entries
+                    continue
 
     action_score = LEVEL_SCORES.get(worst_external_action_level, 1)
     aorm_base_score = object_score + action_score
-    
 
-    # 3. Anomaly Score 계산
+    # 4) anomaly score
     anomaly_score = behavior_profiler.process_event(process_name, file_path, aorm_base_score)
-    
-    # 4. 최종 위험도 산출
+
+    # 5) final risk
     final_risk_score = aorm_base_score * (1 + anomaly_score) * (1 + trajectory_score)
 
-    # 5. 로깅 및 경고
-    aorm_cell = get_aorm_levels(process_name, file_path) # 이 함수는 이제 시각화용
+    # logging
+    aorm_cell = get_aorm_levels(process_name, file_path)
     print(f"[Trajectory] {trajectory_path} => {process_name} opens {file_path} | Mapping to {aorm_cell}")
-    # [수정] 디버그 로그 추가: 어떤 외부 조상 기준으로 점수가 계산되었는지 명시
-    print(f"  [Scoring] Base: {aorm_base_score:.1f} (Obj: {object_level}, Act: based on worst external ancestor '{worst_external_action_level}'), Anomaly: {anomaly_score:.2f}, Trajectory: {trajectory_score:.1f} -> Final: {final_risk_score:.1f}")
+    print(f"  [Scoring] Base: {aorm_base_score:.1f} (Obj:{object_level}, Act: {worst_external_action_level}), Anomaly: {anomaly_score:.2f}, Trajectory: {trajectory_score:.2f} -> Final: {final_risk_score:.1f}")
 
     if final_risk_score >= CRITICAL_THRESHOLD:
         print(f"🚨 ALERT! Suspicious Trajectory Detected. Final Score: {final_risk_score:.1f}")
 
-# --- 이벤트 처리기 ---
-
+# --- event dispatcher from kernel ---
 def process_event_from_kernel(event):
-    """커널로부터 받은 이벤트를 종류에 따라 처리합니다."""
-    
-    # 이벤트 타입 (0: 파일 접근, 1: 프로세스 실행)
-    event_type = event.type
-    
-    if event_type == 1: # EVENT_TYPE_EXEC
-        # 프로세스 트리에 새로운 프로세스 정보 추가
-        pid = event.pid
-        ppid = event.ppid
-        comm = event.comm.decode('utf-8', 'replace')
-        exe_path = event.fname.decode('utf-8', 'replace')
+    """
+    Entry point for events coming from BPF agent.
+    Expects `event` to expose .type, .pid, .ppid, .comm, .fname, .old_fname as attributes (bytes or str).
+    """
+    # defensive extraction
+    try:
+        event_type = int(getattr(event, 'type', 0))
+    except Exception:
+        print("[WARN] process_event_from_kernel: event.type invalid, defaulting to 0")
+        event_type = 0
+
+    # exec events: update process_tree
+    if event_type == 1:  # exec
+        try:
+            pid = int(getattr(event, 'pid', -1))
+            ppid = int(getattr(event, 'ppid', 0))
+        except Exception:
+            print(f"[WARN] process_event_from_kernel: invalid pid/ppid values pid={getattr(event,'pid',None)} ppid={getattr(event,'ppid',None)}")
+            return
+
+        comm = safe_str(getattr(event, 'comm', ''))
+        exe_path = safe_str(getattr(event, 'fname', ''))
+        # update process tree (overwrite or create)
         process_tree[pid] = {'ppid': ppid, 'comm': comm, 'exe_path': exe_path}
-    
-    # FILE_OPEN, RENAME, UNLINK 모두 동일한 파일 이벤트 분석 함수로 전달
-    elif event_type in [0, 2, 3]: 
+        # optional debug:
+        # print(f"[INFO] Exec observed: pid={pid} ppid={ppid} comm={comm} exe={exe_path}")
+
+    # file events: analyze
+    elif event_type in [0, 2, 3]:
         analyze_file_event(event)
+
+    # else: ignore other event types for now
