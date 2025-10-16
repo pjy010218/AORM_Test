@@ -92,48 +92,50 @@ def reset_environment():
             os.remove(f)
 
 def analyze_aorm_log(scenario_key, log_file):
-    """
-    [수정됨] 지정된 로그 파일을 읽고, 경고와 그 원인이 되는 indicator를 함께 분석합니다.
-    """
-    total_alerts = 0
-    attack_detected = False
     indicators = CONFIG["attack_scenarios"][scenario_key]["aorm_indicators"]
-    
-    print(f"  [DEBUG] Analyzing log file: '{log_file}' for indicators: {indicators}")
+    total_alerts = 0
+    true_alerts = 0
+    false_alerts = 0
+
     if not os.path.exists(log_file):
-        print(f"  [DEBUG] Log file not found. Marking as FN.")
         return {'tp': 0, 'fp': 0, 'fn': 1}
 
     with open(log_file, 'r') as f:
         log_lines = f.readlines()
 
+    seen_alerts = set()  # 중복 방지
     for i, line in enumerate(log_lines):
-        if "🚨" in line:
-            total_alerts += 1
-            context_window = log_lines[max(0, i-5):i+1] # 경고 라인까지 포함
-            for indicator in indicators:
-                for context_line in context_window:
-                    if indicator in context_line:
-                        attack_detected = True
-                        print(f"  [DEBUG] Attack DETECTED. Indicator '{indicator}' found near alert.")
-                        break # 내부 루프 탈출
-                if attack_detected:
-                    break # 외부 루프 탈출
-            
-            if attack_detected:
-                break # 공격이 탐지되었으면 더 이상 다른 경고를 분석할 필요 없음
-    
-    # recon 시나리오에 대한 특별 처리 (기존 로직 유지)
-    if scenario_key == "1_recon" and total_alerts > 0:
-        attack_detected = True
-        
-    if attack_detected:
-        # 공격을 정확히 탐지했다면, 나머지 경고는 오탐(FP)으로 간주합니다.
-        return {'tp': 1, 'fp': total_alerts - 1, 'fn': 0}
-    else:
-        # 공격을 탐지하지 못했다면, 발생한 모든 경고는 오탐(FP)입니다.
-        print(f"  [DEBUG] Attack NOT detected. Total alerts found: {total_alerts}")
-        return {'tp': 0, 'fp': total_alerts, 'fn': 1}
+        if "🚨" not in line:
+            continue
+
+        alert_text = line.strip()
+        if alert_text in seen_alerts:
+            continue  # 같은 ALERT는 중복 카운트 X
+        seen_alerts.add(alert_text)
+        total_alerts += 1
+
+        # ALERT 주변 context 확인 (indicator 존재 여부)
+        context_window = log_lines[max(0, i-5):i+1]
+        matched_indicator = any(
+            any(indicator in c_line for c_line in context_window)
+            for indicator in indicators
+        )
+
+        if matched_indicator:
+            true_alerts += 1
+        else:
+            false_alerts += 1
+
+    # 만약 ALERT가 전혀 없으면 FN
+    if total_alerts == 0:
+        return {'tp': 0, 'fp': 0, 'fn': 1}
+
+    # ALERT가 있었지만 indicator가 전혀 없으면 FN으로 간주
+    if true_alerts == 0:
+        return {'tp': 0, 'fp': false_alerts, 'fn': 1}
+
+    # 정상적인 경우
+    return {'tp': true_alerts, 'fp': false_alerts, 'fn': 0}
 
 def analyze_fim_log(fim_output, scenario_key):
     alerts = fim_output.strip().split('\n')
