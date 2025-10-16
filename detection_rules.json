@@ -1,0 +1,35 @@
+{
+  "whitelist_commands": [
+    "date",
+    "sleep",
+    "apt-config",
+    "dpkg",
+    "apt-get",
+    "apt",
+    "systemd",
+    "systemctl",
+    "bash",
+    "sh"
+  ],
+  "rules": {
+    "1_recon": [
+      {"field": "comm", "type": "contains", "pattern": "cat"},
+      {"field": "fname", "type": "contains", "pattern": "/etc/passwd"},
+      {"field": "comm", "type": "contains", "pattern": "find"},
+      {"field": "fname", "type": "contains", "pattern": "/etc/cron.d/"},
+      {"field": "comm", "type": "equals", "pattern": "ps"}
+    ],
+    "2_rootkit": [
+      {"field": "fname", "type": "equals", "pattern": "/bin/ls"},
+      {"field": "comm", "type": "contains", "pattern": "mv"},
+      {"field": "comm", "type": "contains", "pattern": "cp"},
+      {"field": "fname", "type": "contains", "pattern": "/tmp/malicious_ls"}
+    ],
+    "3_multistage": [
+      {"field": "fname", "type": "contains", "pattern": "/etc/hosts"},
+      {"field": "comm", "type": "contains", "pattern": "chmod"},
+      {"field": "fname", "type": "contains", "pattern": "/tmp/payload_"},
+      {"field": "comm", "type": "contains", "pattern": "sudo"}
+    ]
+  }
+}
