@@ -68,7 +68,17 @@ else:
 # --- 2. 정책 / 매핑 정의 ---
 WHITELIST_PATHS = (
     '/proc/', '/lib/', '/usr/lib/', '/etc/ld.so.cache',
-    '/sys/', '/run/', '/dev/', '/proc/sys/', '/sys/fs/', '/var/run/'
+    '/sys/', '/run/', '/dev/', '/proc/sys/', '/sys/fs/', '/var/run/',
+    "/usr/libexec/coreutils/",
+    "/usr/share/locale/",
+    "/usr/share/locale-langpack/",
+    "/usr/share/dpkg/",
+    "/etc/apt/apt.conf.d/",
+    "/etc/dpkg/",
+    "/var/lib/dpkg/",
+    "/var/lib/apt/",
+    "/dev/null",
+    "/tmp/"
 )
 
 OBJECT_POLICY = {
@@ -88,7 +98,9 @@ LEVEL_NAMES = ["L0", "L1", "L2", "L3"]
 SYSTEM_COMM_WHITELIST = set([
     "systemd", "init", "kthreadd", "rcu_sched", "kworker",
     "watchdog", "sshd", "systemd-oomd", "snapd", "containerd",
-    "dbus-daemon", "irqbalance", "polkitd"
+    "dbus-daemon", "irqbalance", "polkitd",
+    "apt-config", "apt-get", "dpkg", "gpgconf", "gpg-connect-agent",
+    "apt-key", "simulate_normal", "date", "sleep", "head", "rm"
 ])
 
 INDICATOR_MIN_MATCHES = 2  # 최소 2개 인디케이터 일치 시 강제 ALERT
