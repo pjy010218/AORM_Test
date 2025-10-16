@@ -283,3 +283,13 @@ def process_event_from_kernel(event):
         process_tree[pid] = {'ppid': ppid, 'comm': comm, 'exe_path': exe}
     elif t in [0, 2, 3]:
         analyze_file_event(event)
+
+def save_behavior_profile():
+    """
+    현재 수집된 정상 행위를 behavior_profile.json으로 저장합니다.
+    """
+    try:
+        behavior_profiler.save_profile("behavior_profile.json")
+        print("✅ Saved behavior profile to 'behavior_profile.json'")
+    except Exception as e:
+        print(f"[ERROR] Failed to save behavior profile: {e}")
