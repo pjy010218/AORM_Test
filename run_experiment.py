@@ -16,19 +16,19 @@ CONFIG = {
     "attack_scenarios": {
         "1_recon": {
             "cmd": "./attack_recon.sh",
-            "aorm_indicators": ["find /", "cat /etc/passwd"],
+            "aorm_indicators": ["find", "cat /etc/passwd"],
             "attack_log": "attack_recon_simulation.log",
             "fim_expected_alerts": 1
         },
         "2_rootkit": {
             "cmd": "sudo ./attack_rootkit.sh",
-            "aorm_indicators": ["/bin/ls", "mv", "cp"],
+            "aorm_indicators": ["/bin/ls", "mv", "cp", "/usr/bin/which"],
             "attack_log": "attack_rootkit_simulation.log",
             "fim_expected_alerts": 1
         },
         "3_multistage": {
             "cmd": "./attack_multistage.sh",
-            "aorm_indicators": ["payload", "wget", "/tmp/payload"],
+            "aorm_indicators": ["payload", "wget", "/tmp/payload", "/etc/passwd", "/etc/hosts"],
             "attack_log": "attack_multistage_simulation.log",
             "fim_expected_alerts": 2
         },
@@ -87,6 +87,8 @@ def reset_environment():
     for f in [CONFIG["profile_file"], "simulation.log"]:
         if os.path.exists(f):
             os.remove(f)
+    os.remove("learning.log") if os.path.exists("learning.log") else None
+    os.remove("simulation.log") if os.path.exists("simulation.log") else None
 
 # --- AORM 로그 분석 ---
 def analyze_aorm_log(scenario_key, log_file):
@@ -192,7 +194,6 @@ def main():
                         if "🚨" in f.read():
                             alert_found = True
                             print("  -> ✅ ALERT signal detected.")
-                            break
                 time.sleep(1)
             if not alert_found:
                 print("  -> ❌ No ALERT detected (timeout).")
